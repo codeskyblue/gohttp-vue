@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -50,12 +51,13 @@ type HTTPStaticServer struct {
 	PlistProxy      string
 	GoogleTrackerID string
 	AuthType        string
+	DBModel         Model
 
 	indexes []IndexFileItem
 	m       *mux.Router
 }
 
-func NewHTTPStaticServer(root string) *HTTPStaticServer {
+func NewHTTPStaticServer(root string, dbmodel Model) *HTTPStaticServer {
 	if root == "" {
 		root = "./"
 	}
@@ -66,9 +68,10 @@ func NewHTTPStaticServer(root string) *HTTPStaticServer {
 	log.Printf("root path: %s\n", root)
 	m := mux.NewRouter()
 	s := &HTTPStaticServer{
-		Root:  root,
-		Theme: "black",
-		m:     m,
+		Root:    root,
+		Theme:   "black",
+		m:       m,
+		DBModel: dbmodel,
 	}
 
 	go func() {
@@ -131,6 +134,7 @@ func (s *HTTPStaticServer) hIndex(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.FormValue("download") == "true" {
 			w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(filepath.Base(path)))
+			DldIncre(s.DBModel, r.RemoteAddr, path)
 		}
 		http.ServeFile(w, r, relPath)
 	}
@@ -341,6 +345,7 @@ func (s *HTTPStaticServer) hInfo(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPStaticServer) hZip(w http.ResponseWriter, r *http.Request) {
 	path := mux.Vars(r)["path"]
+	DldIncre(s.DBModel, r.RemoteAddr, path)
 	CompressToZip(w, filepath.Join(s.Root, path))
 }
 
@@ -463,6 +468,7 @@ type HTTPFileInfo struct {
 	Type    string `json:"type"`
 	Size    int64  `json:"size"`
 	ModTime int64  `json:"mtime"`
+	DldCnt  int    `json:"dldcnt"`
 }
 
 type AccessTable struct {
@@ -597,6 +603,7 @@ func (s *HTTPStaticServer) hJSONList(w http.ResponseWriter, r *http.Request) {
 			Name:    info.Name(),
 			Path:    path,
 			ModTime: info.ModTime().UnixNano() / 1e6,
+			DldCnt:  (*s.DBModel.Data)[path],
 		}
 		if search != "" {
 			name, err := filepath.Rel(requestPath, path)
@@ -815,4 +822,11 @@ func checkFilename(name string) error {
 		return errors.New("Name should not contains \\/:*<>|")
 	}
 	return nil
+}
+
+func DldIncre(model Model, rAddress string, path string) {
+	ip, _, _ := net.SplitHostPort(rAddress)
+	if DCounter.Validate(ip, path) {
+		model.Incre(path)
+	}
 }
